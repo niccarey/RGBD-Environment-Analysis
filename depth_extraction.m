@@ -1,0 +1,166 @@
+% Extract depth map, with or without termites
+
+debug_check = input('Debug mode? (warning: slower) [N]', 's');
+if isempty(debug_check)
+    debug_flag = 0;
+else
+    debug_flag = 1;
+end
+
+% enter duration
+start_frame = input('Enter frame number of start: ','s');
+current_frame = str2num(start_frame);
+
+termite_proc_flag = 1;
+
+param_precheck;
+
+% ask about persistence filter
+timefilt_input = input('Use persistence filter? [N]/other ', 's');
+if isempty(timefilt_input)
+    timefilt_flag = 0;
+    fw_frame = 0;
+else
+    timefilt_flag = 1;
+    if ~exist('fw_frame', 'var')
+        fw_frame = input('Enter persistence frame parameter: ');
+    end
+end
+clear timefilt_input
+
+% ask about averaging filter
+average_frames = input('Number of frames to average over? [default = 1] ');
+if isempty(average_frames)
+    average_frames = 1;
+end
+
+bg_flag = 0;
+
+if exist('bg_frame', 'var')
+    use_bg = input('Do you want to use background frame subtraction to eliminate steady-state noise? [] = no, other = yes ', 's');
+    if ~isempty(use_bg)
+        bg_flag = 1;
+    end
+else
+    bg_stop = input('Warning: No background frame to subtract - results could include steady-state noise. Continue? [] = yes, other = no ', 's');
+    if ~isempty(bg_stop)
+        return
+    end
+end
+
+% noise elimination?
+noiseflag = 0;
+isnoise = input('Remove noisy pixels? [] = no, other = yes] ', 's');
+if ~isempty(isnoise)
+    noiseflag = 1;
+end
+
+if debug_flag
+    debug_fig = figure;
+end
+    
+while current_frame < length(dispfiles)+1
+
+    % read in current rgb image:
+    cd(rgbdir);
+    if length(rgbfiles) < current_frame
+        disp('Reached end of file list');
+        break
+    end
+    imname = rgbfiles(current_frame).name;
+    cd('../');
+    
+    % RGB preparation:
+    rgb_filt_dat = termite_rgb_preprocess(imname, dish_thresh, rgb_preproc, imwidth, imheight);
+    dishMask = rgb_filt_dat.dishMasked;
+    currentRGB = rgb_filt_dat.currentRGB;
+    bwMask = rgb_filt_dat.bwMask;
+    
+    if (exist('rgb_overlay', 'var')) && col_correct_flag
+        overlayRGB =  imadjust( dishMask, rgb_overlay ,[]);
+    else
+        overlayRGB = dishMask;
+    end
+    
+    % Termite location:
+    [tCent, tRad, bw_debug] = termite_rgb_localisation(termite_thresh, currentRGB, bfill_param, tlength);
+    
+    % read in current depth image:
+    cd(depthdir);
+    depthname = dispfiles(current_frame).name;
+    cd('../');
+    
+    % Depth processing
+    [depthmap_raw, dStruct] = termite_depth_extraction(depthname, calibStruct, plate_om, plate_tc, alpha_vec, depth_error, dmin_th, dmax_th);
+    t_depthLoc = termite_depth_localisation(tCent, calibStruct, depth_est); 
+    
+    % Calculate masking area from RGB
+    DepthCircMask = calc_depth_mask(bwMask, calibStruct, plate_tc, depth_est);
+    
+    % remove termites from depth frame
+    depthmap_noterm = termite_removal(t_depthLoc, depthmap_raw, DepthCircMask);
+    % We need to store data in a structure we can pass
+    
+    if current_frame > 1
+        frameDat = load_prev_frames(prefix_name, storedir, average_frames, current_frame);
+    end
+
+    if bg_flag
+        depthmap_noterm = depthmap - bg_frame;
+    end
+    
+    if current_frame < 2
+        depthmap = depthmap_noterm;
+    else 
+        if timefilt_flag  % shouldn't need >1 condition but anyway
+            depthmap = persistence_filter(depthmap_noterm, dispfiles, fw_frame, current_frame, average_frames, frameDat, calibStruct, plate_om, plate_tc, alpha_vec, depth_error, dmin_th, dmax_th);
+        else
+            % don't average if not using persistence filter - end up with too
+            % many residual termite bits. Just fill with previous data.
+            depthmap = no_filt_update(current_frame, depthmap_noterm, frameDat);
+        end
+    end
+    
+    % get RGB in depth coordinates: need dStruct
+    depth_mm = [dStruct.depthXmap(:), dStruct.depthYmap(:), depthmap(:)];
+    rgbmat = calc_rgb_overlay(depth_mm, calibStruct, plate_om, plate_tc, overlayRGB);
+    
+    % Store rgb overlay.
+   
+    % apply noise mask (if data exists)
+    if (exist('noiseMask', 'var')) && noiseflag
+        depthmap(noiseMask > 0 ) = NaN;
+    end
+    
+    % store frame 
+    store_current_frame('depth_frame_', storedir, current_frame, depthmap);
+    %store_overlay('rgbover_frame_', storedir, current_frame, rgbmat);
+    
+    % eval(['frameDat.storeframe_' num2str(current_frame) '= depthmap;']);
+    % update current frame number
+    current_frame = current_frame + 1;
+    
+    % if debug: display output
+    % four plots: 1) RGB 2) BW filtered RGB 3) raw depth 4) depth to store
+    if debug_flag
+        figure(debug_fig);
+        subplot(2,2,1); imshow(currentRGB);
+        subplot(2,2,2); imshow(bw_debug);
+        subplot(2,2,3); mesh(depthmap_raw);view(0,90); plotCentroids(t_depthLoc, DepthCircMask);
+        subplot(2,2,4); showDepth(depthmap, DepthCircMask, dmin_th, dmax_th);
+        drawnow;
+    end
+    
+    clear frameDat;
+    clear depth_mm;
+    
+end
+
+figure; showDepth(depthmap, DepthCircMask, dmin_th, dmax_th);
+% clean up parameters that aren't needed or may need resetting
+clear bw_debug 
+clear fw_frame
+clear timefilt_flag
+clear depthmap_raw
+clear depthmap_noterm
+% ... PROBABLY MORE
