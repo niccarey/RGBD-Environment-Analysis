@@ -4,7 +4,6 @@ prevname = ['storeframe_' num2str(kk-1)];
 
 if isfield(frameDat, prevname) %exist(prevname, 'var')
     eval(['prevdepth = frameDat.storeframe_' num2str(kk-1) ';']);
-
     depthdiff = depthmap  - prevdepth;
     depthdiffPos = find(depthdiff > 0.2);
     depthdiffNeg = find(depthdiff < -0.2);
@@ -54,7 +53,7 @@ if isfield(frameDat, prevname) %exist(prevname, 'var')
     avDepth(nanIndexMap_new) = filteredDepth(nanIndexMap_new);
 
     depth_pfilt = avDepth;
-
+    
 else
     % if this is the start of the averaging, just return the existing frame
     depth_pfilt = depthmap;
